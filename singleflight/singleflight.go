@@ -22,7 +22,7 @@ import "sync"
 
 // call is an in-flight or completed Do call
 type call struct {
-	wg  sync.WaitGroup
+	wg  sync.WaitGroup  // 路障
 	val interface{}
 	err error
 }

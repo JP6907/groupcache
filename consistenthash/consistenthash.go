@@ -15,6 +15,10 @@ limitations under the License.
 */
 
 // Package consistenthash provides an implementation of a ring hash.
+
+
+// 没有考虑节点动态变化的情况
+
 package consistenthash
 
 import (
@@ -52,12 +56,14 @@ func (m *Map) IsEmpty() bool {
 // Add adds some keys to the hash.
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
+		// 增加虚拟节点，解决数据倾斜问题
 		for i := 0; i < m.replicas; i++ {
 			hash := int(m.hash([]byte(strconv.Itoa(i) + key)))
 			m.keys = append(m.keys, hash)
 			m.hashMap[hash] = key
 		}
 	}
+	// 构造有序hash环
 	sort.Ints(m.keys)
 }
 
@@ -69,10 +75,11 @@ func (m *Map) Get(key string) string {
 
 	hash := int(m.hash([]byte(key)))
 
-	// Binary search for appropriate replica.
+	// Binary search for appropriate replica. 二分查找
 	idx := sort.Search(len(m.keys), func(i int) bool { return m.keys[i] >= hash })
 
 	// Means we have cycled back to the first replica.
+	// 没有找到，使用首元素
 	if idx == len(m.keys) {
 		idx = 0
 	}

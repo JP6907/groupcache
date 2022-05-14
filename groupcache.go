@@ -206,11 +206,15 @@ func (g *Group) initPeers() {
 }
 
 func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
+	// 只执行一次
 	g.peersOnce.Do(g.initPeers)
 	g.Stats.Gets.Add(1)
 	if dest == nil {
 		return errors.New("groupcache: nil dest Sink")
 	}
+	// 从mainCache和hotCache中找
+	// maincache为分布式中本地分配到的cache部分
+	// hotcache是由于访问频率高而被复制到此节点的缓存,尽管本节点不是它的拥有者。
 	value, cacheHit := g.lookupCache(key)
 
 	if cacheHit {
@@ -223,11 +227,14 @@ func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
 	// (if local) will set this; the losers will not. The common
 	// case will likely be one caller.
 	destPopulated := false
+	// 从其它节点加载或从db加载
+	// 同个key，同时多次请求，只有一次调用destPopulated=true
 	value, destPopulated, err := g.load(ctx, key, dest)
 	if err != nil {
 		return err
 	}
 	if destPopulated {
+		// 为啥不返setSinkView了？？？
 		return nil
 	}
 	return setSinkView(dest, value)
@@ -236,6 +243,7 @@ func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
 // load loads key either by invoking the getter locally or by sending it to another machine.
 func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView, destPopulated bool, err error) {
 	g.Stats.Loads.Add(1)
+	// 只有第一个请求会执行func的逻辑
 	viewi, err := g.loadGroup.Do(key, func() (interface{}, error) {
 		// Check the cache again because singleflight can only dedup calls
 		// that overlap concurrently.  It's possible for 2 concurrent
@@ -262,10 +270,12 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 			g.Stats.CacheHits.Add(1)
 			return value, nil
 		}
+		// 只有一个请求会走到下面的逻辑
 		g.Stats.LoadsDeduped.Add(1)
 		var value ByteView
 		var err error
 		if peer, ok := g.peers.PickPeer(key); ok {
+			// 从其它节点拿数据，并缓存到本地节点
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
@@ -284,6 +294,7 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		}
 		g.Stats.LocalLoads.Add(1)
 		destPopulated = true // only one caller of load gets this return value
+		// 加载到mainCache
 		g.populateCache(key, value, &g.mainCache)
 		return value, nil
 	})
@@ -315,6 +326,7 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (
 	// TODO(bradfitz): use res.MinuteQps or something smart to
 	// conditionally populate hotCache.  For now just do it some
 	// percentage of the time.
+	// 10分之一的概率认为这会是一个热key，先把它加载到缓存
 	if rand.Intn(10) == 0 {
 		g.populateCache(key, value, &g.hotCache)
 	}
